@@ -1,0 +1,33 @@
+# Minimal example for consul-acl-sync
+# This example can be tested with consul agent -dev
+
+policies:
+  # Simple test policy
+  - name: test-policy
+    description: "Test policy for development"
+    rules: |
+      # Allow reading any key under 'test/'
+      key_prefix "test/" {
+        policy = "read"
+      }
+
+  # Another simple policy
+  - name: admin-policy
+    description: "Admin policy for test environment"
+    rules: |
+      # Allow writing any key under 'config/'
+      key_prefix "config/" {
+        policy = "write"
+      }
+
+tokens:
+  # Basic test token
+  - description: "Test application token"
+    policies:
+      - test-policy
+
+  # Admin token with multiple policies
+  - description: "Test admin token"
+    policies:
+      - test-policy
+      - admin-policy
