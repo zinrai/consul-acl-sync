@@ -1,8 +1,4 @@
 # Example configuration for consul-acl-sync.
-# secret_id is a credential, so keep this file under sops and decrypt it to a
-# temporary file for the run:
-#
-#   sops exec-file --no-fifo config.yaml 'consul-acl-sync -config {}'
 
 policies:
   - name: web-read

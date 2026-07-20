@@ -16,8 +16,8 @@ type Policy struct {
 }
 
 // Token is a Consul ACL token, keyed by AccessorID. SecretID is the credential,
-// kept sops-encrypted in the config and pinned so creation is deterministic.
-// Both AccessorID and SecretID are set at create time and immutable afterward.
+// pinned in the config so creation is deterministic. Both AccessorID and
+// SecretID are set at create time and immutable afterward.
 type Token struct {
 	AccessorID  string   `yaml:"accessor_id"`
 	SecretID    string   `yaml:"secret_id"`

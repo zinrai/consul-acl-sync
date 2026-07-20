@@ -40,17 +40,12 @@ func run() error {
 		return fmt.Errorf("-config is required")
 	}
 
-	token := os.Getenv("CONSUL_HTTP_TOKEN")
-	if token == "" {
-		return fmt.Errorf("CONSUL_HTTP_TOKEN is required")
-	}
-
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return err
 	}
 
-	client := NewConsulClient(consulAddr, token)
+	client := NewConsulClient(consulAddr, os.Getenv("CONSUL_HTTP_TOKEN"))
 	plan, err := CalculatePlan(client, cfg)
 	if err != nil {
 		return err

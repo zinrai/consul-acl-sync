@@ -11,16 +11,7 @@ here.
 ## Usage
 
 ```bash
-$ export CONSUL_HTTP_TOKEN=...
 $ consul-acl-sync -config config.yaml
-```
-
-`secret_id` is a credential, so keep the file under sops. Decrypt it to a
-temporary file for the run with `sops exec-file`, which leaves no plaintext on
-disk:
-
-```bash
-$ sops exec-file --no-fifo config.yaml 'consul-acl-sync -config {}'
 ```
 
 See `example.yaml` for the schema.
@@ -50,9 +41,11 @@ $ consul-acl-sync -config config.yaml -consul-addr http://consul.example.com:850
 - **Built-in resources**: the config declares only what it manages, so built-in
   policies and system tokens are never touched.
 
-## Environment variables
+## ACL token
 
-- `CONSUL_HTTP_TOKEN`: Consul ACL management token (required)
+The token is read from the `CONSUL_HTTP_TOKEN` environment variable, following
+the `consul` CLI convention, rather than a flag so it does not leak into process
+listings or shell history. It needs `acl:write` on a cluster that enforces ACLs.
 
 ## License
 
