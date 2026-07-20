@@ -9,46 +9,35 @@ import (
 	"strings"
 )
 
-// ConsulClient represents a client for Consul HTTP API
+// ConsulClient is a client for the Consul ACL HTTP API.
 type ConsulClient struct {
 	addr   string
 	token  string
 	client *http.Client
 }
 
-// NewConsulClient creates a new Consul API client
 func NewConsulClient(addr, token string) *ConsulClient {
-	// Set default address if not provided
 	if addr == "" {
-		addr = "http://localhost:8500"
+		addr = "http://127.0.0.1:8500"
 	}
-
-	// Ensure address doesn't have trailing slash
 	addr = strings.TrimRight(addr, "/")
-
-	return &ConsulClient{
-		addr:   addr,
-		token:  token,
-		client: &http.Client{},
-	}
+	return &ConsulClient{addr: addr, token: token, client: &http.Client{}}
 }
 
-// makeRequest performs an HTTP request to Consul API
-func (c *ConsulClient) makeRequest(method, path string, body interface{}) (*http.Response, error) {
-	var bodyReader io.Reader
+func (c *ConsulClient) do(method, path string, body, out interface{}) error {
+	var reader io.Reader
 	if body != nil {
-		jsonBody, err := json.Marshal(body)
+		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+			return err
 		}
-		bodyReader = bytes.NewReader(jsonBody)
+		reader = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequest(method, c.addr+path, bodyReader)
+	req, err := http.NewRequest(method, c.addr+path, reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
 		req.Header.Set("X-Consul-Token", c.token)
@@ -56,232 +45,100 @@ func (c *ConsulClient) makeRequest(method, path string, body interface{}) (*http
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-
-	return resp, nil
-}
-
-// GetPolicyByName retrieves a policy by name
-func (c *ConsulClient) GetPolicyByName(name string) (*Policy, error) {
-	// First, get all policies to find the one with matching name
-	resp, err := c.makeRequest("GET", "/v1/acl/policies", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to list policies: %s (status: %d)", string(body), resp.StatusCode)
-	}
-
-	var policies []struct {
-		ID   string `json:"ID"`
-		Name string `json:"Name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&policies); err != nil {
-		return nil, fmt.Errorf("failed to decode policies: %w", err)
-	}
-
-	// Find the policy with matching name
-	for _, p := range policies {
-		if p.Name == name {
-			// Get full policy details
-			return c.GetPolicy(p.ID)
-		}
-	}
-
-	return nil, nil
-}
-
-// GetPolicy retrieves a single policy by ID
-func (c *ConsulClient) GetPolicy(id string) (*Policy, error) {
-	resp, err := c.makeRequest("GET", "/v1/acl/policy/"+id, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get policy: %s (status: %d)", string(body), resp.StatusCode)
-	}
-
-	var policy Policy
-	if err := json.NewDecoder(resp.Body).Decode(&policy); err != nil {
-		return nil, fmt.Errorf("failed to decode policy: %w", err)
-	}
-
-	return &policy, nil
-}
-
-// CreatePolicy creates a new ACL policy
-func (c *ConsulClient) CreatePolicy(policy Policy) (*Policy, error) {
-	resp, err := c.makeRequest("PUT", "/v1/acl/policy", policy)
-	if err != nil {
-		return nil, err
+		return fmt.Errorf("request to %s failed: %w", path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to create policy '%s': %s", policy.Name, string(body))
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s %s returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-
-	var created Policy
-	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
-		return nil, fmt.Errorf("failed to decode created policy: %w", err)
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
 	}
-
-	return &created, nil
-}
-
-// UpdatePolicy updates an existing ACL policy
-func (c *ConsulClient) UpdatePolicy(id string, policy Policy) error {
-	policy.ID = id
-	resp, err := c.makeRequest("PUT", "/v1/acl/policy/"+id, policy)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to update policy '%s': %s", policy.Name, string(body))
-	}
-
 	return nil
 }
 
-// GetTokenByDescription retrieves a token by description
-func (c *ConsulClient) GetTokenByDescription(description string) (*Token, error) {
-	resp, err := c.makeRequest("GET", "/v1/acl/tokens", nil)
-	if err != nil {
+// ListPolicies returns all policies. The list endpoint does not include Rules,
+// so PolicyRules fills them in per policy.
+func (c *ConsulClient) ListPolicies() ([]consulPolicy, error) {
+	var policies []consulPolicy
+	if err := c.do(http.MethodGet, "/v1/acl/policies", nil, &policies); err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to list tokens: %s (status: %d)", string(body), resp.StatusCode)
-	}
-
-	var tokens []Token
-	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
-		return nil, fmt.Errorf("failed to decode tokens: %w", err)
-	}
-
-	// Find the token with matching description
-	for _, t := range tokens {
-		if t.Description == description {
-			// Get full token details
-			return c.GetToken(t.AccessorID)
-		}
-	}
-
-	return nil, nil
+	return policies, nil
 }
 
-// GetToken retrieves a single token by accessor ID
-func (c *ConsulClient) GetToken(accessorID string) (*Token, error) {
-	resp, err := c.makeRequest("GET", "/v1/acl/token/"+accessorID, nil)
-	if err != nil {
+// PolicyRules fetches a single policy so its Rules can be compared.
+func (c *ConsulClient) PolicyRules(id string) (consulPolicy, error) {
+	var p consulPolicy
+	if err := c.do(http.MethodGet, "/v1/acl/policy/"+id, nil, &p); err != nil {
+		return consulPolicy{}, err
+	}
+	return p, nil
+}
+
+// ListTokens returns all tokens. Each entry already carries its policy links.
+func (c *ConsulClient) ListTokens() ([]consulToken, error) {
+	var tokens []consulToken
+	if err := c.do(http.MethodGet, "/v1/acl/tokens", nil, &tokens); err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get token: %s (status: %d)", string(body), resp.StatusCode)
-	}
-
-	var token Token
-	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
-		return nil, fmt.Errorf("failed to decode token: %w", err)
-	}
-
-	return &token, nil
+	return tokens, nil
 }
 
-// CreateToken creates a new ACL token
-func (c *ConsulClient) CreateToken(token Token) error {
-	// Ensure policies have IDs, not names
-	for i, policy := range token.Policies {
-		if policy.ID == "" && policy.Name != "" {
-			// Resolve name to ID
-			p, err := c.GetPolicyByName(policy.Name)
-			if err != nil {
-				return fmt.Errorf("failed to resolve policy '%s': %w", policy.Name, err)
-			}
-			if p == nil {
-				return fmt.Errorf("policy '%s' not found", policy.Name)
-			}
-			token.Policies[i].ID = p.ID
-			token.Policies[i].Name = "" // Clear name, use only ID
-		}
-	}
-
-	resp, err := c.makeRequest("PUT", "/v1/acl/token", token)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to create token '%s': %s", token.Description, string(body))
-	}
-
-	return nil
+type policyRequest struct {
+	ID          string   `json:"ID,omitempty"`
+	Name        string   `json:"Name"`
+	Description string   `json:"Description,omitempty"`
+	Rules       string   `json:"Rules"`
+	Datacenters []string `json:"Datacenters,omitempty"`
 }
 
-// UpdateToken updates an existing ACL token
-func (c *ConsulClient) UpdateToken(accessorID string, token Token) error {
-	token.AccessorID = accessorID
+func (c *ConsulClient) CreatePolicy(p Policy) error {
+	body := policyRequest{Name: p.Name, Description: p.Description, Rules: p.Rules, Datacenters: p.Datacenters}
+	return c.do(http.MethodPut, "/v1/acl/policy", body, nil)
+}
 
-	// Ensure policies have IDs, not names
-	for i, policy := range token.Policies {
-		if policy.ID == "" && policy.Name != "" {
-			// Resolve name to ID
-			p, err := c.GetPolicyByName(policy.Name)
-			if err != nil {
-				return fmt.Errorf("failed to resolve policy '%s': %w", policy.Name, err)
-			}
-			if p == nil {
-				return fmt.Errorf("policy '%s' not found", policy.Name)
-			}
-			token.Policies[i].ID = p.ID
-			token.Policies[i].Name = "" // Clear name, use only ID
-		}
+func (c *ConsulClient) UpdatePolicy(id string, p Policy) error {
+	body := policyRequest{ID: id, Name: p.Name, Description: p.Description, Rules: p.Rules, Datacenters: p.Datacenters}
+	return c.do(http.MethodPut, "/v1/acl/policy/"+id, body, nil)
+}
+
+type tokenRequest struct {
+	AccessorID  string              `json:"AccessorID,omitempty"`
+	SecretID    string              `json:"SecretID,omitempty"`
+	Description string              `json:"Description,omitempty"`
+	Policies    []policyLinkRequest `json:"Policies"`
+}
+
+type policyLinkRequest struct {
+	Name string `json:"Name"`
+}
+
+// tokenBody builds a token request. Consul resolves policy links by name, so
+// the policies created earlier in the same run are already resolvable.
+func tokenBody(t Token) tokenRequest {
+	links := make([]policyLinkRequest, 0, len(t.Policies))
+	for _, name := range t.Policies {
+		links = append(links, policyLinkRequest{Name: name})
 	}
-
-	resp, err := c.makeRequest("PUT", "/v1/acl/token/"+accessorID, token)
-	if err != nil {
-		return err
+	return tokenRequest{
+		AccessorID:  t.AccessorID,
+		SecretID:    t.SecretID,
+		Description: t.Description,
+		Policies:    links,
 	}
-	defer resp.Body.Close()
+}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to update token '%s': %s", token.Description, string(body))
-	}
+func (c *ConsulClient) CreateToken(t Token) error {
+	return c.do(http.MethodPut, "/v1/acl/token", tokenBody(t), nil)
+}
 
-	return nil
+// UpdateToken addresses the token by AccessorID in the path. SecretID is
+// omitted because it is immutable after creation.
+func (c *ConsulClient) UpdateToken(t Token) error {
+	body := tokenBody(t)
+	body.SecretID = ""
+	return c.do(http.MethodPut, "/v1/acl/token/"+t.AccessorID, body, nil)
 }

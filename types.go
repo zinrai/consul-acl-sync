@@ -1,124 +1,74 @@
 package main
 
-import "encoding/json"
-
-// Config represents the YAML configuration file structure
+// Config is the YAML configuration consul-acl-sync applies. The same file is
+// read by consul-acl-diff.
 type Config struct {
 	Policies []Policy `yaml:"policies"`
 	Tokens   []Token  `yaml:"tokens"`
 }
 
-// Policy represents a Consul ACL policy
+// Policy is a Consul ACL policy, keyed by Name.
 type Policy struct {
-	ID          string   `yaml:"-" json:"ID,omitempty"`
-	Name        string   `yaml:"name" json:"Name"`
-	Description string   `yaml:"description,omitempty" json:"Description,omitempty"`
-	Rules       string   `yaml:"rules" json:"Rules"`
-	Datacenters []string `yaml:"datacenters,omitempty" json:"Datacenters,omitempty"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Rules       string   `yaml:"rules"`
+	Datacenters []string `yaml:"datacenters"`
 }
 
-// Token represents a Consul ACL token
+// Token is a Consul ACL token, keyed by AccessorID. SecretID is the credential,
+// kept sops-encrypted in the config and pinned so creation is deterministic.
+// Both AccessorID and SecretID are set at create time and immutable afterward.
 type Token struct {
-	AccessorID  string       `yaml:"-" json:"AccessorID,omitempty"`
-	SecretID    string       `yaml:"-" json:"SecretID,omitempty"`
-	Description string       `yaml:"description,omitempty" json:"Description,omitempty"`
-	Policies    []PolicyLink `yaml:"policies"`
+	AccessorID  string   `yaml:"accessor_id"`
+	SecretID    string   `yaml:"secret_id"`
+	Description string   `yaml:"description"`
+	Policies    []string `yaml:"policies"`
 }
 
-// PolicyLink represents a reference to a policy in a token
-type PolicyLink struct {
-	ID   string `json:"ID,omitempty"`
-	Name string `json:"Name,omitempty"`
+// consulPolicy is the subset of the Consul policy API we read. The list
+// endpoint omits Rules, so it is filled in per policy on demand.
+type consulPolicy struct {
+	ID          string   `json:"ID"`
+	Name        string   `json:"Name"`
+	Description string   `json:"Description"`
+	Rules       string   `json:"Rules"`
+	Datacenters []string `json:"Datacenters"`
 }
 
-// MarshalYAML customizes YAML marshaling for Token
-func (t Token) MarshalYAML() (interface{}, error) {
-	type tokenYAML struct {
-		Description string   `yaml:"description,omitempty"`
-		Policies    []string `yaml:"policies"`
-	}
-
-	policies := make([]string, len(t.Policies))
-	for i, p := range t.Policies {
-		if p.Name != "" {
-			policies[i] = p.Name
-		} else {
-			policies[i] = p.ID
-		}
-	}
-
-	return &tokenYAML{
-		Description: t.Description,
-		Policies:    policies,
-	}, nil
+// consulToken is the subset of the Consul token API we read. The list endpoint
+// already carries the policy links.
+type consulToken struct {
+	AccessorID  string             `json:"AccessorID"`
+	Description string             `json:"Description"`
+	Policies    []consulPolicyLink `json:"Policies"`
 }
 
-// UnmarshalYAML customizes YAML unmarshaling for Token
-func (t *Token) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	type tokenYAML struct {
-		Description string   `yaml:"description,omitempty"`
-		Policies    []string `yaml:"policies"`
-	}
-
-	var aux tokenYAML
-	if err := unmarshal(&aux); err != nil {
-		return err
-	}
-
-	t.Description = aux.Description
-	t.Policies = make([]PolicyLink, len(aux.Policies))
-	for i, name := range aux.Policies {
-		t.Policies[i] = PolicyLink{Name: name}
-	}
-
-	return nil
+type consulPolicyLink struct {
+	ID   string `json:"ID"`
+	Name string `json:"Name"`
 }
 
-// DiffResult represents the differences between current and desired state
-type DiffResult struct {
+// Plan is the additive set of changes to apply. consul-acl-sync never deletes:
+// resources present only in Consul are left untouched. Surface them with
+// consul-acl-diff and remove them by runbook.
+type Plan struct {
 	PoliciesToCreate []Policy
 	PoliciesToUpdate []PolicyUpdate
 	TokensToCreate   []Token
-	TokensToUpdate   []TokenUpdate
+	TokensToUpdate   []Token
 }
 
-// PolicyUpdate represents a policy that needs updating
+// PolicyUpdate pairs the desired policy with the existing Consul ID that the
+// update endpoint addresses.
 type PolicyUpdate struct {
-	Current Policy
+	ID      string
 	Desired Policy
 }
 
-// TokenUpdate represents a token that needs updating
-type TokenUpdate struct {
-	Current Token
-	Desired Token
-}
-
-// HasChanges returns true if there are any changes to apply
-func (d *DiffResult) HasChanges() bool {
-	return len(d.PoliciesToCreate) > 0 ||
-		len(d.PoliciesToUpdate) > 0 ||
-		len(d.TokensToCreate) > 0 ||
-		len(d.TokensToUpdate) > 0
-}
-
-// MarshalJSON customizes JSON marshaling for Token
-func (t Token) MarshalJSON() ([]byte, error) {
-	type tokenAlias Token
-	aux := struct {
-		tokenAlias
-		Policies []PolicyLink `json:"Policies,omitempty"`
-	}{
-		tokenAlias: tokenAlias(t),
-		Policies:   t.Policies,
-	}
-
-	if len(t.Policies) > 0 {
-		aux.Policies = make([]PolicyLink, len(t.Policies))
-		for i, p := range t.Policies {
-			aux.Policies[i] = p
-		}
-	}
-
-	return json.Marshal(&aux)
+// HasChanges reports whether the plan would modify anything.
+func (p *Plan) HasChanges() bool {
+	return len(p.PoliciesToCreate) > 0 ||
+		len(p.PoliciesToUpdate) > 0 ||
+		len(p.TokensToCreate) > 0 ||
+		len(p.TokensToUpdate) > 0
 }

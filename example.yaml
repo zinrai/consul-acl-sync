@@ -1,33 +1,29 @@
-# Minimal example for consul-acl-sync
-# This example can be tested with consul agent -dev
+# Example configuration for consul-acl-sync.
+# secret_id is a credential, so keep this file under sops and decrypt it to a
+# temporary file for the run:
+#
+#   sops exec-file --no-fifo config.yaml 'consul-acl-sync -config {}'
 
 policies:
-  # Simple test policy
-  - name: test-policy
-    description: "Test policy for development"
+  - name: web-read
+    description: "Read access for the web app"
     rules: |
-      # Allow reading any key under 'test/'
-      key_prefix "test/" {
+      key_prefix "web/" {
         policy = "read"
       }
 
-  # Another simple policy
-  - name: admin-policy
-    description: "Admin policy for test environment"
+  - name: config-write
+    description: "Write access to shared config"
     rules: |
-      # Allow writing any key under 'config/'
       key_prefix "config/" {
         policy = "write"
       }
 
 tokens:
-  # Basic test token
-  - description: "Test application token"
+  # accessor_id is the identity key and secret_id is the credential. Both are
+  # pinned so create is deterministic and re-runs stay idempotent.
+  - accessor_id: 3b2a1c00-0000-4000-8000-000000000001
+    secret_id: 9f1c7d00-0000-4000-8000-000000000001
+    description: "web app token"
     policies:
-      - test-policy
-
-  # Admin token with multiple policies
-  - description: "Test admin token"
-    policies:
-      - test-policy
-      - admin-policy
+      - web-read
